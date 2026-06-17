@@ -1,0 +1,255 @@
+---
+title: "Data Science Capstone — Milestone Report"
+subtitle: "Exploratory Analysis of the SwiftKey Text Corpora"
+author: "Khaleel Khan"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: cosmo
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.align = "center", fig.width = 8, fig.height = 4.5)
+library(tidyverse)
+library(tidytext)
+library(scales)
+set.seed(2026)
+```
+
+## Executive summary
+
+This is the milestone report for the Johns Hopkins **Data Science Capstone**. The
+end goal of the project is a Shiny web app that predicts the *next word* a user is
+likely to type, trained on a large collection of English text from blogs, news
+articles and Twitter.
+
+This report covers the first stage of that work. In plain terms, it shows that I have:
+
+1. **Downloaded and loaded** the three English text files successfully.
+2. Produced **basic summary statistics** for each file (size, lines, words).
+3. Explored the data with **plots** of line lengths and the most common words and phrases.
+4. Laid out a **plan** for the prediction model and the app.
+
+No data-science background is needed to read it — the technical code is hidden by
+default (use the **Code** buttons on the right to reveal any of it).
+
+## The data
+
+The data comes from the course's [SwiftKey dataset](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip).
+It contains text in four languages; I use only the three English files:
+
+- `en_US.blogs.txt` — text from blog posts
+- `en_US.news.txt` — text from news articles
+- `en_US.twitter.txt` — tweets
+
+```{r download, eval=FALSE}
+# Run once to fetch and unzip the data (not re-run on every knit).
+url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
+download.file(url, "data/raw/Coursera-SwiftKey.zip", mode = "wb")
+unzip("data/raw/Coursera-SwiftKey.zip", exdir = "data/raw")
+```
+
+```{r load}
+data_dir <- "data/raw/final/en_US"
+files <- c(Blogs = "en_US.blogs.txt",
+           News  = "en_US.news.txt",
+           Twitter = "en_US.twitter.txt")
+paths <- file.path(data_dir, files)
+
+# Read a file and return it as a clean (valid-UTF-8) character vector of lines.
+read_clean <- function(path) {
+  con <- file(path, open = "r", encoding = "UTF-8")
+  txt <- readLines(con, skipNul = TRUE, warn = FALSE)
+  close(con)
+  iconv(txt, from = "UTF-8", to = "UTF-8", sub = "")
+}
+
+corpora <- lapply(paths, read_clean)
+names(corpora) <- names(files)
+```
+
+## Basic summary statistics
+
+For each file I record its size on disk, the number of lines, the total number of
+words, and the length of the longest single line.
+
+```{r summary-table}
+summary_tbl <- tibble(
+  File                   = names(files),
+  `Size (MB)`            = round(file.info(paths)$size / 2^20, 1),
+  Lines                  = map_int(corpora, length),
+  Words                  = map_dbl(corpora, ~ sum(str_count(.x, "\\S+"))),
+  `Mean words / line`    = round(Words / Lines, 1),
+  `Longest line (chars)` = map_int(corpora, ~ max(nchar(.x)))
+)
+
+knitr::kable(
+  summary_tbl,
+  format.args = list(big.mark = ","),
+  caption = "Table 1. Summary of the three English corpora."
+)
+```
+
+All three files are large — together hundreds of megabytes and millions of lines.
+Twitter has by far the most lines (each tweet is short), while blogs and news have
+fewer but much longer lines.
+
+## Sampling
+
+Because the files are so large, training and exploring on all of them at once is slow
+and memory-hungry. Following standard practice, I take a random **2% sample** of lines
+from each file and combine them. This is more than enough to reveal the structure of
+the language while keeping the analysis fast and reproducible.
+
+```{r sample}
+samp <- imap_dfr(corpora, function(lines, src) {
+  keep <- rbinom(length(lines), size = 1, prob = 0.02) == 1
+  tibble(source = src, text = lines[keep])
+})
+
+# Free the full corpora from memory now that we have the sample.
+rm(corpora); invisible(gc())
+
+sample_size <- nrow(samp)
+```
+
+The combined sample has **`r comma(sample_size)`** lines of text.
+
+## Words per line
+
+A first useful view is how long the lines are in each source. Twitter lines are
+capped short (tweets were 140 characters at the time), blogs and news run longer.
+
+```{r words-per-line}
+samp %>%
+  mutate(words = str_count(text, "\\S+")) %>%
+  filter(words <= 60) %>%
+  ggplot(aes(words, fill = source)) +
+  geom_histogram(binwidth = 2, show.legend = FALSE) +
+  facet_wrap(~ source, scales = "free_y") +
+  labs(title = "Distribution of words per line, by source",
+       x = "Words per line", y = "Number of lines") +
+  theme_minimal()
+```
+
+## Most common words and phrases
+
+I tokenise the sampled text into single words (**unigrams**), word pairs
+(**bigrams**) and word triples (**trigrams**), dropping tokens that contain digits.
+N-grams are the foundation of the prediction model: to guess the next word, the model
+looks at the last one or two words typed and asks "what most often comes next?"
+
+```{r tokenize}
+unigrams <- samp %>%
+  unnest_tokens(word, text) %>%
+  filter(!str_detect(word, "[0-9]")) %>%
+  count(word, sort = TRUE)
+
+bigrams <- samp %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  filter(!is.na(bigram), !str_detect(bigram, "[0-9]")) %>%
+  count(bigram, sort = TRUE)
+
+trigrams <- samp %>%
+  unnest_tokens(trigram, text, token = "ngrams", n = 3) %>%
+  filter(!is.na(trigram), !str_detect(trigram, "[0-9]")) %>%
+  count(trigram, sort = TRUE)
+```
+
+```{r top-plot-fn}
+top_plot <- function(df, col, title, fill) {
+  df %>%
+    slice_max(n, n = 15) %>%
+    mutate(term = reorder(.data[[col]], n)) %>%
+    ggplot(aes(n, term)) +
+    geom_col(fill = fill) +
+    scale_x_continuous(labels = comma) +
+    labs(title = title, x = "Frequency", y = NULL) +
+    theme_minimal()
+}
+```
+
+### Top single words
+
+```{r uni-plot}
+top_plot(unigrams, "word", "Top 15 single words", "#2c7fb8")
+```
+
+As expected, the list is dominated by common English function words ("the", "to",
+"and", ...). These carry little meaning on their own but are essential for predicting
+fluent text, so I keep them in.
+
+### Top word pairs (bigrams)
+
+```{r bi-plot}
+top_plot(bigrams, "bigram", "Top 15 word pairs (bigrams)", "#41b6c4")
+```
+
+### Top word triples (trigrams)
+
+```{r tri-plot}
+top_plot(trigrams, "trigram", "Top 15 word triples (trigrams)", "#7fcdbb")
+```
+
+## An interesting finding: word coverage
+
+A small number of words accounts for most of the text. The chart below shows the
+**cumulative coverage**: how much of all word usage is explained as we add more of the
+most frequent unique words.
+
+```{r coverage}
+coverage <- unigrams %>%
+  mutate(rank = row_number(),
+         cum_cov = cumsum(n) / sum(n))
+
+n50 <- coverage %>% filter(cum_cov >= 0.50) %>% slice(1) %>% pull(rank)
+n90 <- coverage %>% filter(cum_cov >= 0.90) %>% slice(1) %>% pull(rank)
+total_unique <- nrow(unigrams)
+
+ggplot(coverage, aes(rank, cum_cov)) +
+  geom_line(colour = "#2c7fb8", linewidth = 1) +
+  geom_hline(yintercept = c(0.5, 0.9), linetype = "dashed", colour = "grey50") +
+  scale_y_continuous(labels = percent) +
+  scale_x_continuous(labels = comma) +
+  labs(title = "Cumulative word coverage",
+       x = "Number of unique words (most frequent first)",
+       y = "Share of all words covered") +
+  theme_minimal()
+```
+
+Only about **`r comma(n50)`** unique words are needed to cover **50%** of all word
+usage, and about **`r comma(n90)`** to cover **90%** — out of roughly
+**`r comma(total_unique)`** unique words in the sample. This matters a lot for the app:
+a relatively small dictionary can handle the vast majority of what users type, which
+keeps the model small and fast.
+
+## Plan for the prediction model and Shiny app
+
+Based on this exploration, my plan is:
+
+1. **Build n-gram frequency tables** (unigram → quadgram) from a larger sample of the
+   cleaned corpus, keeping only n-grams above a small frequency threshold to control size.
+2. **Predict with a back-off model.** Given the last few words typed, look up the
+   matching trigram/quadgram; if none is found, "back off" to the bigram, then to the
+   most common unigrams. (Stupid back-off is fast and works well for this task.)
+3. **Optimise for size and speed** so it can run on the free Shiny hosting tier —
+   prune rare n-grams and store the tables efficiently.
+4. **Build the Shiny app**: a text box where the user types, and the app shows the top
+   few predicted next words, updating as they type.
+5. **Validate** accuracy on a held-out sample and present the result in a short slide deck.
+
+Feedback I'd welcome: whether 2% sampling is enough, and the right trade-off between
+model size and prediction accuracy for the hosted app.
+
+## Appendix — environment
+
+```{r session, echo=TRUE}
+sessionInfo()
+```
