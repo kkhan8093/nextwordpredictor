@@ -1,0 +1,3 @@
+# The model files here are tiny (<1 MB total) — keep them as normal git
+# objects rather than Git LFS (overrides the repo-root *.rds LFS rule).
+*.rds !filter !diff !merge

@@ -1,0 +1,85 @@
+---
+title: "Next-Word Predictor"
+subtitle: "Data Science Capstone — Final Pitch"
+author: "Khaleel Khan"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output: ioslides_presentation
+widescreen: true
+---
+
+## The problem & the product
+
+Typing on phones is slow. **Next-Word Predictor** is a web app that guesses the
+*next word* as you type — like the suggestion bar on a smartphone keyboard.
+
+- **Input:** a phrase typed into a text box (e.g. *"the president of the united"*).
+- **Output:** the most likely next word (*"states"*), plus a couple of alternatives.
+- **Built in R + Shiny**, hosted on shinyapps.io so anyone can use it from a browser.
+
+The model was trained on a large corpus of English **blogs, news articles and tweets**
+(the SwiftKey dataset, ~4 million lines / ~100 million words).
+
+## The algorithm: n-gram "stupid back-off"
+
+The model is built from **n-grams** — sequences of 1, 2 and 3 consecutive words counted
+in the training text. To predict, it backs off from longer to shorter context:
+
+1. Look at the **last two words** → return the most frequent word that followed them (trigram).
+2. If unseen, back off to the **last word** → most frequent follower (bigram).
+3. If still unseen, fall back to the **most common words** overall (unigram).
+
+```r
+predict_next <- function(phrase, k = 3) {
+  # trigram (last 2 words) -> bigram (last word) -> unigram fallback
+  ...
+}
+```
+
+Tables are **pruned** (rare n-grams dropped, top-3 kept per prefix), so the whole
+model is **under 1 MB** and predicts in **milliseconds**.
+
+## The app: how to use it
+
+<div class="columns-2">
+**Steps**
+
+1. Open the app (link on the last slide).
+2. Type a phrase in the text box.
+3. Press **"Predict next word"**.
+4. The top prediction appears in large blue text, with other likely words below.
+
+**Why it's nice to use**
+
+- Loads instantly (tiny model).
+- Clean, single-screen layout — no setup.
+- Works on any phrase, always returns an answer.
+</div>
+
+<br>
+*Example:* `i can't wait to` → **see** &nbsp;(also: get, hear)
+
+## Performance
+
+- **Trained on:** 5% sample of the SwiftKey corpus (~214k lines) — enough for good
+  coverage while keeping the app fast and within the free hosting tier.
+- **Model size:** < 1 MB across trigram, bigram and unigram tables.
+- **Speed:** predictions return effectively instantly (keyed `data.table` lookups).
+- **Coverage:** every test phrase drawn from news/Twitter returned a sensible prediction.
+
+| Phrase (last word removed)      | Prediction |
+|---------------------------------|------------|
+| the president of the united     | **states** |
+| happy mothers                   | **day**    |
+| looking forward to the          | **next**   |
+
+## Try it & summary
+
+**Live app:** `https://REPLACE-WITH-YOUR-ACCOUNT.shinyapps.io/next-word-predictor/`
+
+**Source code:** https://github.com/kkhan8093/nextwordpredictor
+
+**In short:** a fast, lightweight next-word prediction app powered by an n-gram
+back-off model trained on real-world English text — simple enough to run on free
+hosting, accurate enough to be genuinely useful.
+
+*Thank you!*
