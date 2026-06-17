@@ -74,7 +74,7 @@ model is **under 1 MB** and predicts in **milliseconds**.
 
 ## Try it & summary
 
-**Live app:** `https://REPLACE-WITH-YOUR-ACCOUNT.shinyapps.io/next-word-predictor/`
+**Live app:** https://khaleelkhan.shinyapps.io/next-word-predictor/
 
 **Source code:** https://github.com/kkhan8093/nextwordpredictor
 
